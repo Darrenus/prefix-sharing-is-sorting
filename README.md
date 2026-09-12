@@ -38,8 +38,8 @@ build `paper.tex` from `paper.md`.
 ## Authorship
 
 Rong He is the author of this work and of all results reported in the paper. Claude (Anthropic) was
-used as a research assistant during development; its contribution is secondary and is recorded only
-in the commit trailers.
+used as a research assistant during development; that contribution is secondary and is disclosed
+here rather than in the commit history.
 
 ## License
 
