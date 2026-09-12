@@ -1,0 +1,14 @@
+data/
+*.aux
+*.log
+*.out
+*.pdf
+*.synctex.gz
+/tmp/
+*.out.txt
+sweep.out
+tiered.out
+online_real.out
+code/hill.out
+code/anneal.out
+.DS_Store
