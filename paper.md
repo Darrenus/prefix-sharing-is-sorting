@@ -2,44 +2,14 @@
 
 **Rong He**
 
-*Preprint. Code and data pipeline: `code/` in this repository; every number below is reproducible
-from a clean checkout.*
+*Code, data pipeline, and verification scripts: <https://github.com/Darrenus/prefix-sharing-is-sorting>*
 
 
-**Abstract.** LLM serving reuses KV cache by exact prefix match. When a prompt is assembled from a
-*set* of reusable pieces — retrieved passages, tool definitions, few-shot exemplars, memory items —
-their order is a free design variable, and every deployed system fixes it with a single global
-convention. We show that convention is optimal only when requests have at most two pieces, and
-asymptotically wrong in general.
-
-Our main result is a structure theorem: the minimum prefix-trie cost equals
-$\min_H \sum_x w(x)\,t_x(H)$, minimised over binary hierarchies $H$ on the *requests*, where
-$t_x(H)$ is the canonical-decomposition size of $\{i : x \in R_i\}$ in $H$. The permutations
-vanish; choosing chunk orders is choosing one hierarchy over requests, and every chunk is
-recomputed once per fragment it is split across. The identity yields an $O(3^m)$ exact algorithm,
-reduces the problem to a hierarchical clustering objective, and explains the phenomena: with
-two-chunk requests the problem *is* minimum vertex cover; the smallest instance where a global
-order is suboptimal is the complete 3-uniform hypergraph on four chunks (8 versus 9); and on the
-leave-one-out family the optimum is the minimum external path length of a binary tree — the
-merge-sort recursion — so a global order pays $\Theta(n^2)$ where the truth is $\Theta(n\log n)$,
-an unbounded $\Theta(n/\log n)$ gap. The natural level-wise greedy hitting-set algorithm attains the
-bad $\Theta(n^2)$; agglomerative clustering by common intersection is a tight
-$\tfrac12$-approximation for the savings.
-
-On real BM25 retrieval traces over three BEIR corpora, with real token counts, the adaptive layout
-cuts prefill by 17–36% against what production RAG actually does, and the margin *widens* with
-retrieval depth exactly as the theory predicts — while production's own prefix reuse degrades to
-almost nothing at $k=16$. On real retrieval structure the greedy is 0.05% from the exact optimum.
-13–23% survives even when the most relevant passages are pinned in place for answer quality, and
-the fully online variant recovers about half the offline gain. Finally, the hierarchy doubles as a
-schedule: served in its DFS order, a cache holding one request's context attains the
-unbounded-cache optimum exactly, so cache capacity and reorder window turn out to be substitutes.
-We also correct an earlier reading of our own: a synthetic workload badly understated what is
-available on real traces.
+**Abstract.** LLM serving reuses KV cache by exact prefix match, so when a prompt is assembled from a *set* of reusable pieces — retrieved passages, tool definitions, few-shot exemplars — the order chosen for those pieces determines how much computation can be shared. Every deployed system fixes that order by a single global convention. We prove this is optimal only when requests contain at most two pieces, and asymptotically wrong in general. Our main result is a structure theorem: the minimum prefix-trie cost equals $\min_H \sum_x w(x) t_x(H)$ over binary hierarchies $H$ on the *requests*, where $t_x(H)$ is the canonical decomposition size of the set of requests needing chunk $x$. Choosing chunk orders is therefore equivalent to choosing one hierarchy over requests. The identity yields an $O(3^m)$ exact algorithm, identifies the two-chunk case as minimum vertex cover, and shows that on the leave-one-out family the optimum is the minimum external path length of a binary tree — the merge-sort recursion — so a global order pays $\Theta(n^2)$ against a true cost of $\Theta(n\log n)$. Agglomerative clustering by common intersection is a tight $\tfrac12$-approximation for the achievable saving. On BM25 retrieval traces over three BEIR corpora the resulting layout reduces prefill by 17–36% against production RAG ordering, and the margin widens with retrieval depth as the theory predicts. Serving requests in the hierarchy's DFS order finally lets a cache holding one request's context attain the unbounded-cache optimum exactly, so cache capacity and reorder window act as substitutes.
 
 ---
 
-## 1. The setting
+## 1. Introduction
 
 Every production LLM serving stack — vLLM [KWO23], SGLang [SGL], TensorRT-LLM, and the
 prompt-caching APIs of the commercial providers — reuses KV cache by *exact prefix match*. Two
@@ -70,26 +40,26 @@ optimal only in a degenerate regime, and asymptotically wrong in general.
    $\min_H \sum_x w(x) t_x(H)$ over binary hierarchies on the *requests*, where $t_x$ is a
    canonical-decomposition size. The permutations vanish: choosing orders is choosing one
    clustering. This gives an $O(3^m)$ exact algorithm and is the engine for everything below.
-2. **Exactly when a global order is enough** (Sections 4–5). It is optimal iff every request has at
+2. **The reach of global orders** (Section 4). It is optimal iff every request has at
    most two chunks — at two chunks the problem *is* minimum vertex cover — and the unique minimal
    counterexample is the complete 3-uniform hypergraph on four chunks, 8 versus 9.
-3. **An unbounded separation with a classical answer** (Section 6). On the leave-one-out family the
+3. **An unbounded separation** (Section 5). On the leave-one-out family the
    optimum is the minimum external path length of a binary tree, so a global order pays
    $\Theta(n^2)$ where the truth is $\Theta(n\log n)$ — the merge-sort recursion, and a
    $\Theta(n/\log n)$ gap.
-4. **A tight approximation** (Section 7). The natural level-wise greedy hitting set attains the bad
+4. **A tight approximation** (Section 6). The natural level-wise greedy hitting set attains the bad
    $\Theta(n^2)$; agglomerative clustering by common intersection is a tight
    $\tfrac12$-approximation for the savings, and is 0.05% from optimal on real retrieval structure.
-5. **Measurement on real traces** (Section 8). 17–36% of prefill against production RAG on three
+5. **Evaluation on real traces** (Section 7). 17–36% of prefill against production RAG on three
    BEIR corpora, widening with retrieval depth exactly as the theory predicts; 13–23% survives a
    quality-preserving constraint.
-6. **The finite-cache story** (Section 9). The hierarchy is also a schedule: in its DFS order a
+6. **Finite cache and scheduling** (Section 8). The hierarchy is also a schedule: in its DFS order a
    one-request cache attains the unbounded-cache optimum exactly, so capacity and reorder window
    are substitutes.
 
 ---
 
-## 2. The problem
+## 2. Problem Formulation
 
 **Minimum Prefix Trie with Free Permutations (MPT).**
 Given a universe $U$ of chunks with weights $w:U\to\mathbb{Z}_{>0}$ (token counts) and requests
@@ -109,11 +79,11 @@ Two variants matter:
 - $\mathrm{OPT}_{\mathrm{glob}}$: all $\pi_i$ must be induced by one linear order on $U$.
   This is what every deployed system does.
 
-The whole paper is about the distance between these two.
+The remainder of the paper studies the distance between these two quantities.
 
 ---
 
-## 3. The structure theorem
+## 3. A Structure Theorem for Prefix Layout
 
 Everything below rests on one identity. It says the permutations are not really the objects
 of this problem at all.
@@ -147,29 +117,26 @@ $I(\{i\}) = R_i$, so this is a valid layout. Chunk $x$ is emitted at node $B$ ex
 $x \in I(B) \setminus I(\mathrm{parent}(B))$, i.e. exactly when $B$ is a maximal cluster inside
 $S_x$. So the layout has cost at most $\sum_x w(x)t_x(H)$. $\square$
 
-Two remarks on the proof. First, nothing forces sibling subtrees to begin with *different*
-chunks: if they collide, the trie merges them and the cost only drops, so no
-system-of-distinct-representatives condition is needed. We spent a while looking for that
-obstruction before realising the trie absorbs it. Second, the identity is weight-agnostic — the
-per-chunk counting never mentions depth.
+Two remarks. Sibling subtrees are not required to begin with distinct chunks: if they collide the
+trie merges them and the cost only drops, so no system-of-distinct-representatives condition
+arises. The identity is also weight-agnostic, since the per-chunk counting never refers to depth.
 
-### 3.1 What the theorem buys
+### 3.1 Consequences
 
-**The permutations disappear.** Choosing an order for every request is the same thing as choosing
-*one binary hierarchy over the requests*; the orders are then read off it. For a practitioner the
-restatement is the useful part: **stop thinking about how to sort chunks, and think about how to
-cluster requests.**
+**Elimination of the permutations.** Choosing an order for every request is equivalent to choosing
+*one binary hierarchy over the requests*, from which the orders are read off. The operational
+restatement is that the design variable is a clustering of requests, not a sort order on chunks.
 
-**It is the segment-tree quantity.** $t_x(H)$ is the canonical decomposition size of $S_x$ in
+**Relation to segment trees.** $t_x(H)$ is the canonical decomposition size of $S_x$ in
 $H$ — the same quantity that makes a range query touch $O(\log n)$ segment-tree nodes. MPT is
 therefore: *design the tree that minimises total canonical-decomposition size over a given family
 of sets.* Every chunk is recomputed once per fragment it is split across.
 
-**An exact algorithm.** $M(B) = w(I(B)) + \max_{B = B_1 \uplus B_2}(M(B_1)+M(B_2))$ is an
+**Exact algorithm.** $M(B) = w(I(B)) + \max_{B = B_1 \uplus B_2}(M(B_1)+M(B_2))$ is an
 $O(3^m)$ subset DP. It solves $m = 16$ in under two seconds, where brute force over
 $\prod_i |R_i|!$ layouts died at $m = 7$. Every exact number in this paper was recomputed with it.
 
-**When is the problem easy?** If the family $\{S_x\}$ has the *consecutive-ones property* — the
+**A tractable special case.** If the family $\{S_x\}$ has the *consecutive-ones property* — the
 requests can be laid on a line so that every chunk is wanted by a contiguous run, which is what
 perfect topical locality would look like — then a balanced tree over that line makes each $S_x$ an
 interval, and an interval's canonical decomposition has at most $2\lceil\log_2 m\rceil$ nodes.
@@ -181,7 +148,7 @@ so the minimum always picks $|S_x|$. It bites only for genuinely hot chunks — 
 prompt, a tool definition, a document everyone retrieves — where it says the recomputation count is
 logarithmic rather than linear in the sharing.
 
-**It explains where the global convention loses.** A global chunk order $\prec$ induces a
+**Ordered versus free hierarchies.** A global chunk order $\prec$ induces a
 hierarchy too: split the requests repeatedly by the $\prec$-smallest chunk not yet emitted. So
 $\mathrm{OPT}_{\mathrm{glob}}$ is the same minimisation restricted to hierarchies realisable by a
 *fixed chunk priority*. That is exactly the ordered-versus-free distinction of decision diagrams
@@ -189,7 +156,9 @@ $\mathrm{OPT}_{\mathrm{glob}}$ is the same minimisation restricted to hierarchie
 
 ---
 
-## 4. Where the global convention is right
+## 4. Complexity and the Reach of Global Orders
+
+### 4.1 Two-Chunk Requests and Vertex Cover
 
 **Proposition 2 (two-chunk requests are vertex cover).**
 If every $|R_i| = 2$, all weights are 1, and the requests are distinct, then
@@ -214,7 +183,7 @@ The rule is correct — **at the top level only**.
 
 ---
 
-## 5. Where it breaks, exactly
+### 4.2 The Threshold at Three Chunks
 
 **Theorem 4 (the threshold is three).**
 If every request has at most 2 chunks then $\mathrm{OPT}_{\mathrm{glob}} = \mathrm{OPT}_{\mathrm{free}}$.
@@ -238,7 +207,7 @@ vertices.
 
 ---
 
-## 6. The gap is unbounded, and the reason is external path length
+## 5. An Unbounded Separation Between Adaptive and Global Orders
 
 Let $L_n$ be the **leave-one-out family**: universe $[n]$, requests $R_i = [n]\setminus\{i\}$.
 It is the honest caricature of RAG traffic with heavy topical overlap — every two requests share
@@ -261,7 +230,7 @@ $$\mathrm{OPT}_{\mathrm{free}}(L_n) \;=\; \min_H \sum_{x} \mathrm{depth}(x) \;=\
 
 which is the classical $n\lceil\log_2 n\rceil - 2^{\lceil\log_2 n\rceil}+n$. $\square$
 
-### 6.1 The punchline
+### 5.1 Interpretation
 
 Minimum external path length is *why* the sorting numbers appear: it is the same quantity that
 lower-bounds comparison sorting. The sequence $0,2,5,8,12,16,20,24,29,\dots$ is OEIS **A001855** [OEIS],
@@ -282,9 +251,9 @@ optimal hierarchy is the balanced binary tree — the merge-sort recursion tree.
 
 ---
 
-## 7. Algorithms
+## 6. Algorithms
 
-### 7.1 The natural algorithm is the wrong one
+### 6.1 Failure of Level-Wise Greedy Hitting Set
 
 Proposition 3 suggests: at each trie node greedily take the chunk covering the most requests,
 split, recurse. Level-wise greedy hitting set — the algorithm anyone would write.
@@ -298,7 +267,7 @@ $t_x$ is a decomposition size and decomposition sizes are logarithmic in balance
 in unbalanced ones. Set-cover intuition and divide-and-conquer intuition point in opposite
 directions here, and divide-and-conquer wins.
 
-### 7.2 The algorithm that works
+### 6.2 Agglomerative Common-Prefix Hierarchy
 
 **Agglomerative common-prefix hierarchy.** Each request starts as a singleton cluster with
 signature $R_i$. Repeatedly merge the two clusters with the largest common intersection, the merged
@@ -313,12 +282,12 @@ rather than argue about it. On RAG-shaped instances ($m$ = 10–15, $k$ = 5–8,
 lands **2.6% above optimal on average, 11% worst case over 72 instances**. On $L_n$ it is exactly
 optimal ($n = 16, 32, 64, 128 \to 64, 160, 384, 896$).
 
-That matters for reading Section 8: the double-digit margins we measure against the production
+That matters for reading Section 7: the double-digit margins we measure against the production
 baseline are genuine headroom, not heuristic slack.
 
 ---
 
-### 7.3 Greedy captures at least half the achievable savings
+### 6.3 Approximation Guarantee
 
 Theorem 1 turns the algorithmic question into a clean one, and it has a clean answer.
 
@@ -367,20 +336,20 @@ maximum weight matching — where greedy is exactly $\tfrac12$ under adversarial
 witness with four requests: $\{0123\},\{14\},\{2578\},\{46\}$, where greedy can take $1$ against the
 optimal $2$.
 
-**What we verified.** Over 3 000 random weighted instances we checked both the conclusion and the
+**Verification.** Over 3 000 random weighted instances we checked both the conclusion and the
 per-threshold inequality that drives it: zero violations of either. An annealed search over roughly
 15 000 instances, deliberately maximising greedy's shortfall, never got past $1.83$ — so the
-worst case needs adversarial ties, and typical instances are far better (Section 7.2: 2.6% above
+worst case needs adversarial ties, and typical instances are far better (Section 6.3: 2.6% above
 optimal on RAG-shaped inputs).
 
-**The caveat, stated plainly.** This is a guarantee on *savings*, which is the operationally
+**Scope of the guarantee.** This is a guarantee on *savings*, which is the operationally
 meaningful quantity — how much prefill you actually eliminated. It does not transfer to the cost:
 from $\mathrm{SAV}(H_g) \ge \mathrm{SAV}^*/2$ one only gets
 $\mathrm{COST}(H_g) \le \tfrac12(\mathrm{COST}^* + \sum_i w(R_i))$, and since
 $\sum_i w(R_i)/\mathrm{COST}^*$ is unbounded, whether MPT itself is constant-factor approximable
 stays open.
 
-**A computable lower bound, as a by-product.** Every internal node satisfies
+**A computable lower bound.** Every internal node satisfies
 $w(I(v)) \le w(R_i \cap R_j)$ for any $i,j$ drawn from its two subtrees, and one such cross pair per
 internal node forms a spanning tree on the requests. Hence
 $\mathrm{SAV}^* \le \mathrm{MaxSpanningTree}(w(R_i \cap R_j))$, so
@@ -390,19 +359,19 @@ slack $1.45\times$ on random instances, and $\Omega(m)$ in the worst case), but 
 
 ---
 
-## 8. Real retrieval traces
+## 7. Evaluation on Real Retrieval Traces
 
 Everything above is about a combinatorial object. This section asks whether the object shows up in
 real traffic, using BM25 retrieval over BEIR corpora, real passages as chunks, and real
 `cl100k_base` token counts. A request is the set of passages retrieved for one query; cost is total
-prefill tokens. All numbers are reproducible from `code/phase2.py`.
+prefill tokens. All numbers are reproducible from `code/phase2.py` in the repository.
 
-**First, is there anything to share?** On NFCorpus (3 633 passages, 2 921 queries, $k=8$) the
+**Overlap in real retrieval.** On NFCorpus (3 633 passages, 2 921 queries, $k=8$) the
 retrieved sets cover 2 857 distinct passages across 8 472 chunk-slots — a $2.97\times$ dedup factor,
 with 68.7% of retrieved passages wanted by more than one query and a mean $|S_x|$ of 2.76. Real
 retrieval overlaps. The question is whether the overlap becomes *prefix* overlap.
 
-**It mostly does not, today.** Production RAG concatenates passages in relevance order, which is a
+**Conversion of overlap into prefix reuse.** Production RAG concatenates passages in relevance order, which is a
 *per-request* order, not a shared one. On NFCorpus it recovers only 6% of prefill as cache hits.
 A single global convention — sort every request's passages by corpus-wide popularity — does
 substantially better at 13%, which is already the paper's thesis in miniature: **uncoordinated
@@ -422,7 +391,7 @@ better):
 | spanning-tree lower bound | .490 | .488 | .465 | .526 | .546 | .553 | .660 | .687 | .713 |
 | **savings vs production** | **−28.0%** | **−31.6%** | **−36.1%** | **−23.6%** | **−26.2%** | **−29.9%** | **−18.7%** | **−18.5%** | **−17.3%** |
 
-Three things in that table are worth pausing on.
+Three observations follow from this table.
 
 **Production's prefix reuse gets *worse* as you retrieve more.** Relevance order goes .844 → .885 →
 .924 as $k$ grows from 5 to 16 on NFCorpus, and .967 → .990 on FiQA: at $k=16$ over a large corpus,
@@ -438,14 +407,14 @@ than once) and gives −32%. FiQA retrieves 2 500 queries into 57 638 passages (
 shared) and gives −18.5%. So a big sparse corpus halves the benefit — and 18% of prefill is still
 worth having.
 
-**The algorithm is not the bottleneck.** Sampling real overlapping request groups (all requests
+**Distance from the optimum.** Sampling real overlapping request groups (all requests
 retrieving a given popular passage, capped at 13) and solving them exactly with the $O(3^m)$
 algorithm: agglomerative greedy is **0.05% above optimum on average on NFCorpus** (worst group
 2.46%) and **0.00% on SciFact** (worst 0.16%). Theorem 6 guarantees a factor 2 in the worst case;
 on real retrieval structure greedy is essentially exact, and the remaining distance to the
 spanning-tree bound is the bound's looseness, not the heuristic's.
 
-### 8.1 Does reordering hurt answer quality?
+### 7.1 Quality-Preserving Constraints
 
 It might: moving a passage changes what the model attends to, and the "lost in the middle" effect
 says position matters. We did not run a quality evaluation, so instead we priced the constraint that
@@ -462,7 +431,7 @@ So the win survives the constraint: even pinning the three most relevant passage
 8–13% of prefill on the table, and pinning only the single most relevant leaves 19–23%. A quality
 evaluation would still be worth running, but the design does not depend on its outcome.
 
-### 8.2 Online, on the real stream
+### 7.2 Online Layout with Bounded Lookahead
 
 Requests arrive one at a time. We keep a persistent radix trie, place each arrival at its deepest
 usable prefix, and lay out the residuals adaptively inside each batch of $W$ arrivals. Savings
@@ -480,7 +449,7 @@ live trie, which is roughly what CacheWeaver already does. The *adaptive* part, 
 is about, adds another 5–10 points as the window grows past a few hundred and roughly doubles
 offline.
 
-**A correction to our own earlier reading.** An earlier draft ran this sweep on a synthetic
+**Comparison with a synthetic workload.** An earlier version of this evaluation used a synthetic
 Zipf-over-topics generator and found the online curve nearly flat, concluding that adaptivity was
 essentially unavailable online. On real traces that is wrong: the curve rises monotonically and even
 $W=1$ is far above production. The synthetic generator manufactured the difficulty by giving every
@@ -494,14 +463,14 @@ meet still agree; below some window size you pay the coordination cost without b
 coordination. Real traffic simply has far more exploitable structure than our generator did, so the
 threshold sits much lower.
 
-## 9. Finite cache
+## 8. Finite Cache and Scheduling
 
 Theorem 1 assumes the cache holds the whole trie. Real caches evict, which couples the layout with
 the eviction policy and the arrival order. We close that gap here, simulating the radix cache the
 way SGLang and vLLM actually behave: a cached node implies its ancestors are cached, and eviction
 removes least-recently-used *leaves* (`code/cache.py`).
 
-**Served in real query order, the advantage is capacity-gated.** On NFCorpus ($k=8$, 2 921 queries,
+**Under the real arrival order, the advantage is capacity-gated.** On NFCorpus ($k=8$, 2 921 queries,
 one request ≈ 6 036 tokens), our layout's margin over production is −3.0% at a one-request cache,
 −11.3% at $64\times$, −23.5% at $256\times$, and the full −31.7% only past $1024\times$. Below
 roughly $16\times$ every method collapses toward the no-sharing bill: at that capacity prefix
@@ -509,7 +478,7 @@ caching itself has stopped working, and no layout can rescue it. The ranking, at
 inverts — we had expected the top-heavy greedy hitting set to survive eviction better than a
 balanced hierarchy, and it does not.
 
-**But the hierarchy is also a schedule, and that removes the constraint entirely.**
+**The hierarchy also determines a schedule, which removes the capacity constraint.**
 
 **Theorem 7.** Serve requests in the DFS order of the trie — equivalently, sort the stream
 lexicographically by the laid-out sequence. Then a radix cache with LRU leaf eviction and capacity
@@ -529,7 +498,7 @@ costs $+0.8\%$, and only at $0.25\times$ does it break down ($+18\%$). Every lay
 comparison — production's relevance order included — hits its own unbounded-cache number at
 $1\times$.
 
-### 9.1 Capacity and reorder window are substitutes
+### 8.1 Substitution Between Capacity and Reorder Window
 
 Reordering the whole stream is available offline; online you get a window. Sorting inside a window
 of $W$ arrivals, excess over the unbounded-cache optimum (NFCorpus, $k=8$):
@@ -549,7 +518,7 @@ capacity. **Cache capacity and reorder window are substitutes — you need one o
 A stack with a large prefix cache can ignore ordering entirely; a stack with a one-request cache
 and a deep reorder queue gets the identical number. Paying for both buys nothing.
 
-**This is not a new idea to systems people, and we want to be exact about what is new.** SGLang
+**Relation to existing schedulers.** SGLang
 already ships cache-aware scheduling with two policies: LPM, which prioritises the waiting request
 with the longest prefix match, and `DFS_WEIGHT`, which groups waiting requests by their position in
 the cache tree [SGL]. `DFS_WEIGHT` *is* a heuristic DFS traversal. What Theorem 7 adds is the exact
@@ -565,48 +534,12 @@ this paper, against a layout chosen by something else.
 
 ---
 
-## 10. Open problems
-
-Theorem 1 lets these be stated as questions about hierarchies rather than about permutations, which
-is most of the reason we think they are now attackable.
-
-1. **How much does a fixed priority cost?** $\mathrm{OPT}_{\mathrm{glob}}$ is the same minimisation
-   restricted to hierarchies induced by a fixed chunk priority. We have
-   $\mathrm{OPT}_{\mathrm{glob}}/\mathrm{OPT}_{\mathrm{free}} = \Omega(k/\log k)$ from $L_n$ and a
-   trivial $O(k)$ upper bound. Search over small universes says $L_n$ is **not** extremal: the best
-   ratios we have found by annealed search are $1.20$ at $k=3$ and $\mathbf{1.50}$ at $k=4$
-   ($\{0145,0236,1236,1245,1345,1456,2346,2356\}$ on 7 chunks: $14$ versus $21$), against
-   $L_5$'s $1.167$ and $L_6$'s $1.25$ at comparable sizes. At $k=4$ the trivial upper bound is
-   $4$ and $k/\log_2 k = 2$, so $1.50$ does not yet separate the two candidate rates, but it does
-   say the leave-one-out family understates the gap by a wide margin. Is the truth $\Theta(k)$ or
-   $\Theta(k/\log k)$? This is the ordered-versus-free decision diagram question in a setting where
-   the tree is a clustering rather than a branching program, and we do not know whether the known
-   exponential OBDD/FBDD separations transfer.
-
-2. **Approximation of the cost.** Theorem 6 settles the savings side: greedy is a tight
-   $\tfrac12$-approximation for $\max_H \sum_v w(I(v))$. The cost side does not follow, because
-   $\sum_i w(R_i)/\mathrm{OPT}$ is unbounded, and we do not know whether MPT itself admits a
-   constant factor — or whether it is APX-hard. Note the $k=2$ case is *easy* to approximate
-   (the cost is $\tau(G)+m \in [m,2m]$), so hardness of approximation, if it holds, must come from
-   larger requests. The related sort-order problem on a *given* join tree admits a
-   2-approximation [GSD06], which we read as mild encouragement.
-
-3. **Online with lookahead.** Fix a reorder window $W$. What is the competitive ratio against the
-   offline optimum as a function of $W$? Section 8.2 measures a curve that rises monotonically and
-   is still climbing at $W = 512$, and Section 9.1 shows $W$ trading off against cache capacity
-   along an L-shaped frontier. We have no theory for either shape. Our guess is that
-   $\Theta(\log W)$ of the $\log$ factor in Theorem 5 is recoverable and no more.
-
-4. **Beyond exact prefixes.** CacheBlend [CB24] and CacheClip [CC25] trade accuracy for
-   position-independent reuse. There the object is not a trie and Theorem 1 does not apply. Is there a formulation in
-   which the accuracy loss and the layout cost are traded off in one optimisation?
-
-## 11. Related work
+## 9. Related Work
 
 **Prefix caching in serving systems.** vLLM's PagedAttention [KWO23] made KV cache a paged resource
 and automatic prefix caching a standard feature; SGLang's RadixAttention [SGL] keeps prompt and
 generation KV in a radix tree with LRU eviction and adds cache-aware scheduling — LPM, and the
-`DFS_WEIGHT` policy discussed in Section 9.1. Both take the prompt as given. The work closest to
+`DFS_WEIGHT` policy discussed in Section 8.1. Both take the prompt as given. The work closest to
 ours in motivation is CacheWeaver [CW26], which states the problem exactly — "set overlap does not
 become reusable prefix overlap" — and resolves it with a greedy walk over a prefix tree, explicitly
 declining a combinatorial search. A second line attacks the same loss by weakening the exact-prefix
@@ -651,7 +584,71 @@ the (loose) bound of Section 3.1.
 
 **Evaluation.** Retrieval traces come from BEIR [THA21] — NFCorpus [BOT16], SciFact [WAD20] and
 FiQA [MAI18] — with BM25 retrieval and `cl100k_base` token counts. The quality concern that
-motivates Section 8.1 is the position sensitivity documented by Liu et al. [LIU24].
+motivates Section 7.1 is the position sensitivity documented by Liu et al. [LIU24].
+
+---
+
+## 10. Conclusion
+
+Prefix caching rewards requests that agree on a token prefix, but a growing share of production
+traffic is assembled from sets of reusable fragments whose order is chosen by the serving stack
+rather than by the user. This paper treats that choice as an optimisation problem and characterises
+it exactly. The minimum prefill cost is the minimum, over binary hierarchies on the request
+population, of the total canonical-decomposition size of the sets of requests needing each chunk;
+the per-request permutations are determined by that hierarchy and are not independent degrees of
+freedom. The characterisation supplies an exact algorithm, places the two-chunk case in
+correspondence with minimum vertex cover, and identifies the extremal behaviour as minimum external
+path length, so the cost of insisting on one global chunk order grows without bound.
+
+The practical consequences follow from the same object. Agglomerative clustering by common
+intersection is a tight one-half approximation for the achievable saving and is within 0.05% of the
+exact optimum on real retrieval structure; it reduces prefill by 17–36% over the ordering production
+RAG systems currently use, with 13–23% surviving a constraint that pins the most relevant passages
+in place. The hierarchy also serves as a schedule, and traversing it depth-first reduces the cache
+capacity needed to reach the unbounded-cache optimum to a single request's context, which makes
+cache capacity and reorder window interchangeable resources.
+
+Two limitations bound these claims. The evaluation measures prefill tokens rather than end-to-end
+latency on a serving stack, so the translation to time-to-first-token depends on hardware and batch
+composition that we do not model. And the quality question is priced rather than measured: we report
+what the saving costs under a constraint that preserves relevance order, but we do not evaluate
+answer quality directly.
+
+### 10.1 Open Problems
+
+Theorem 1 restates each of the following as a question about hierarchies rather than about
+permutations, which is what makes them tractable to attack.
+
+1. **How much does a fixed priority cost?** $\mathrm{OPT}_{\mathrm{glob}}$ is the same minimisation
+   restricted to hierarchies induced by a fixed chunk priority. We have
+   $\mathrm{OPT}_{\mathrm{glob}}/\mathrm{OPT}_{\mathrm{free}} = \Omega(k/\log k)$ from $L_n$ and a
+   trivial $O(k)$ upper bound. Search over small universes says $L_n$ is **not** extremal: the best
+   ratios we have found by annealed search are $1.20$ at $k=3$ and $\mathbf{1.50}$ at $k=4$
+   ($\{0145,0236,1236,1245,1345,1456,2346,2356\}$ on 7 chunks: $14$ versus $21$), against
+   $L_5$'s $1.167$ and $L_6$'s $1.25$ at comparable sizes. At $k=4$ the trivial upper bound is
+   $4$ and $k/\log_2 k = 2$, so $1.50$ does not yet separate the two candidate rates, but it does
+   say the leave-one-out family understates the gap by a wide margin. Is the truth $\Theta(k)$ or
+   $\Theta(k/\log k)$? This is the ordered-versus-free decision diagram question in a setting where
+   the tree is a clustering rather than a branching program, and we do not know whether the known
+   exponential OBDD/FBDD separations transfer.
+
+2. **Approximation of the cost.** Theorem 6 settles the savings side: greedy is a tight
+   $\tfrac12$-approximation for $\max_H \sum_v w(I(v))$. The cost side does not follow, because
+   $\sum_i w(R_i)/\mathrm{OPT}$ is unbounded, and we do not know whether MPT itself admits a
+   constant factor — or whether it is APX-hard. Note the $k=2$ case is *easy* to approximate
+   (the cost is $\tau(G)+m \in [m,2m]$), so hardness of approximation, if it holds, must come from
+   larger requests. The related sort-order problem on a *given* join tree admits a
+   2-approximation [GSD06], which we read as mild encouragement.
+
+3. **Online with lookahead.** Fix a reorder window $W$. What is the competitive ratio against the
+   offline optimum as a function of $W$? Section 7.2 measures a curve that rises monotonically and
+   is still climbing at $W = 512$, and Section 8.1 shows $W$ trading off against cache capacity
+   along an L-shaped frontier. We have no theory for either shape. Our guess is that
+   $\Theta(\log W)$ of the $\log$ factor in Theorem 5 is recoverable and no more.
+
+4. **Beyond exact prefixes.** CacheBlend [CB24] and CacheClip [CC25] trade accuracy for
+   position-independent reuse. There the object is not a trie and Theorem 1 does not apply. Is there a formulation in
+   which the accuracy loss and the layout cost are traded off in one optimisation?
 
 ---
 
@@ -685,7 +682,10 @@ motivates Section 8.1 is the position sensitivity documented by Liu et al. [LIU2
 
 ---
 
-## Reproducing
+## Appendix A. Reproducibility
+
+All code is at <https://github.com/Darrenus/prefix-sharing-is-sorting>. `get_data.sh` downloads the
+BEIR corpora; `tiktoken` supplies the token counts.
 
 ```
 python3 code/t2.py        # minimal counterexample search (Theorem 3)

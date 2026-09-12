@@ -26,8 +26,15 @@ def inline(s):
     s = re.sub(r'\$[^$]*\$', stash, s)
     s = re.sub(r'\*\*(.+?)\*\*', r'\\textbf{\1}', s)
     s = re.sub(r'(?<![\w*\\])\*(?!\*)(.+?)(?<!\*)\*(?![\w*])', r'\\emph{\1}', s)
-    s = re.sub(r'`([^`]*)`', lambda m:'\\texttt{'+m.group(1).replace('_','\\string_').replace('%','\\%').replace('#','\\#').replace('&','\\&')+'}', s)
+    code=[]
+    def stash_code(m):
+        inner=m.group(1)
+        for a,b in (('_','\\_'),('%','\\%'),('#','\\#'),('&','\\&')):
+            inner=inner.replace(a,b)
+        code.append('\\texttt{'+inner+'}'); return '\x01%d\x01'%(len(code)-1)
+    s = re.sub(r'`([^`]*)`', stash_code, s)
     s = esc_text(s)
+    s = re.sub(r'\x01(\d+)\x01', lambda m: code[int(m.group(1))], s)
     s = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)', r'\\href{\2}{\1}', s)
     s = re.sub(r'(?<=\d) (?=\d\d\d\b)', r'\\,', s)
     s = re.sub(r'\x00(\d+)\x00', lambda m: math[int(m.group(1))], s)
@@ -62,14 +69,14 @@ def convert(md):
             close_list()
             chunk=L.strip()[2:]
             if chunk.rstrip().endswith('$$'):
-                out.append('\\[\n'+chunk.rstrip()[:-2]+'\n\\]'); i+=1; continue
+                out.append('\\begin{equation}\n'+chunk.rstrip()[:-2]+'\n\\end{equation}'); i+=1; continue
             body=[chunk]; i+=1
             while i<len(lines):
                 t=lines[i]
                 if '$$' in t:
                     body.append(t[:t.index('$$')]); i+=1; break
                 body.append(t); i+=1
-            out.append('\\[\n'+'\n'.join(body)+'\n\\]'); continue
+            out.append('\\begin{equation}\n\\begin{split}\n'+'\n'.join(body)+'\n\\end{split}\n\\end{equation}'); continue
         if L.strip().startswith('```'):
             close_list(); i+=1; body=[]
             while i<len(lines) and not lines[i].strip().startswith('```'):
@@ -85,14 +92,22 @@ def convert(md):
             elif lvl==3: out.append('\\subsection{%s}'%t)
             else: out.append('\\subsubsection{%s}'%t)
             i+=1; continue
+        def take_item(text, kind):
+            """gather an item plus its indented continuation lines, then convert as one unit"""
+            nonlocal i, in_list
+            if in_list != kind:
+                close_list(); out.append('\\begin{%s}'%kind); in_list = kind
+            buf=[text]; i+=1
+            while i < len(lines) and re.match(r'^\s\s+\S', lines[i]) \
+                  and not re.match(r'^\s*(-|\d+\.)\s', lines[i]):
+                buf.append(lines[i].strip()); i+=1
+            out.append('\\item '+inline(' '.join(buf)))
         m=re.match(r'^(\s*)-\s+(.*)$', L)
         if m:
-            if in_list!='itemize': close_list(); out.append('\\begin{itemize}'); in_list='itemize'
-            out.append('\\item '+inline(m.group(2))); i+=1; continue
+            take_item(m.group(2), 'itemize'); continue
         m=re.match(r'^(\s*)(\d+)\.\s+(.*)$', L)
         if m:
-            if in_list!='enumerate': close_list(); out.append('\\begin{enumerate}'); in_list='enumerate'
-            out.append('\\item '+inline(m.group(3))); i+=1; continue
+            take_item(m.group(3), 'enumerate'); continue
         if L.startswith('> '):
             close_list(); body=[]
             while i<len(lines) and lines[i].startswith('> '):
@@ -102,8 +117,6 @@ def convert(md):
             if in_list and i+1<len(lines) and re.match(r'^\s*(-|\d+\.)\s', lines[i+1]):
                 i+=1; continue
             close_list(); out.append(''); i+=1; continue
-        if in_list and re.match(r'^\s\s+\S', L):
-            out[-1] = out[-1] + ' ' + inline(L.strip()); i+=1; continue
         close_list()
         para=[L]; i+=1
         while i<len(lines):

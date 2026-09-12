@@ -8,7 +8,7 @@ first_sec = next(i for i,l in enumerate(lines) if l.startswith('\\section{'))
 front, rest = lines[:first_sec], lines[first_sec:]
 abstract = [l for l in front if l.startswith('\\textbf{Abstract.}') or
             (l.strip() and not l.startswith('\\title') and not l.startswith('\\textbf{Rong He}')
-             and not l.startswith('\\emph{Preprint'))]
+             and 'github.com' not in l)]
 abstract = [a.replace('\\textbf{Abstract.} ','') for a in abstract]
 
 # ---- section numbers are already in the text; strip them, let LaTeX number ----
@@ -74,7 +74,7 @@ bib=''
 if mref:
     items=[]
     for it in re.findall(r'\\item \[([A-Z]{2,4}\d{0,2})\]\s*(.*)', mref.group(1)):
-        items.append('\\bibitem[%s]{%s} %s'%(it[0],it[0],it[1]))
+        items.append('\\bibitem{%s} %s'%(it[0],it[1]))
     if not items:
         for it in re.findall(r'\\item (\[[A-Z]{2,4}\d{0,2}\])\s*(.*)', mref.group(1)):
             items.append('\\bibitem{%s} %s'%(it[0].strip('[]'),it[1]))
@@ -104,6 +104,10 @@ PRE = r'''\documentclass[11pt]{article}
 
 \begin{document}
 \maketitle
+\begin{center}\small
+Code, data pipeline, and verification scripts:\\
+\url{https://github.com/Darrenus/prefix-sharing-is-sorting}
+\end{center}
 \begin{abstract}
 %(ABSTRACT)s
 \end{abstract}
