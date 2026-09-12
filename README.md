@@ -1,6 +1,8 @@
 # Prefix Sharing Is a Sorting Problem
 
-Code and data pipeline for the paper *Prefix Sharing Is a Sorting Problem* (Rong He).
+**Author:** Rong He
+
+Code and data pipeline for the paper *Prefix Sharing Is a Sorting Problem*.
 
 LLM serving reuses KV cache by exact prefix match. When a prompt is assembled from a *set* of
 reusable pieces — retrieved passages, tool definitions, few-shot exemplars — their order is a free
@@ -32,6 +34,12 @@ python3 code/phase3d.py        # the capacity / reorder-window frontier
 
 Every number in the paper comes from these scripts. `code/md2tex.py` and `code/assemble.py`
 build `paper.tex` from `paper.md`.
+
+## Authorship
+
+Rong He is the author of this work and of all results reported in the paper. Claude (Anthropic) was
+used as a research assistant during development; its contribution is secondary and is recorded only
+in the commit trailers.
 
 ## License
 
